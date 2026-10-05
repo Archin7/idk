@@ -1,3 +1,5 @@
+from typing import Optional
+
 import psycopg2
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -15,10 +17,15 @@ app.add_middleware(
 )
 
 
-# Define the Note model
+class User(BaseModel):
+    username: str
+    user_id: Optional[int] = None  # noqa: UP045
+
+
 class Note(BaseModel):
     title: str
     content: str
+    user_id: int
 
 
 with open("sysusrname.txt", "r") as f:
@@ -34,10 +41,12 @@ def get_connection():
 
 
 @app.get("/notes")
-def getAll():
+def getAll(user_id: int):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, title, content FROM notes")
+    cursor.execute(
+        "SELECT id, title, content FROM notes WHERE user_id = %s", (user_id,)
+    )
     all_notes = cursor.fetchall()
     cursor.close()
     conn.close()
@@ -50,8 +59,8 @@ def create_note(note: Note) -> dict[str, str | int]:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO notes (title, content) VALUES (%s, %s) RETURNING id",
-        (note.title, note.content),
+        "INSERT INTO notes (title, content, user_id) VALUES (%s, %s, %s) RETURNING id",
+        (note.title, note.content, str(note.user_id)),
     )
 
     new_id = cursor.fetchone()[0]  # pyright: ignore[reportUnknownVariableType, reportOptionalSubscript]
@@ -86,3 +95,32 @@ def delete_note(note_id: int):
     cursor.close()
     conn.close()
     return {"status": "deleted"}
+
+
+@app.post("/users")
+def create_user(user: User) -> dict[str, str | int]:
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO users (username) VALUES (%s) RETURNING id", (user.username,)
+    )
+    result = cursor.fetchone()
+    if result is None:
+        raise ValueError("Failed to create user")
+
+    user_id = result[0]
+    conn.commit()
+    cursor.close()
+    conn.close()
+    return {"id": user_id, "username": user.username}
+
+
+@app.get("/users/{username}")
+def get_user(username: str):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM users WHERE username = %s", (username,))
+    result = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return {"id": result[0]} if result else {}
